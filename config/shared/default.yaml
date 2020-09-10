@@ -1,0 +1,102 @@
+---
+tags:
+  pod: 'none'
+  business-unit: 'shared'
+  platform: 'integration'
+  product: 'cloudops-api'
+  env: ${self:custom.appConfigs.envMap.${self:custom.appConfigs.currentStage}}
+  sub-env: 'management'
+  created-at: '2019-12-12T12:00:00.000Z'
+  created-by: 'skaila'
+  tag-version: '2020.1'
+  functional-status: 'active'
+
+appConfigs:
+  defaultStage: dev
+  currentStage: ${opt:stage, self:custom.appConfigs.defaultStage}
+  importVarPrefix: 
+    ${self:custom.appConfigs.importPrefixServiceName.${self:service.name}, self:custom.appConfigs.importPrefixServiceName.others}-${self:custom.appConfigs.currentStage}
+  userPoolName: ${self:custom.appConfigs.importVarPrefix}-userpool
+  userPoolClientName: ${self:custom.appConfigs.importVarPrefix}-userpool-client
+  userPoolIdExportName: ${self:custom.appConfigs.importVarPrefix}-userpool-id
+  userPoolClientIdExportName: ${self:custom.appConfigs.importVarPrefix}-userpool-client-id
+  userPoolArnExportName: ${self:custom.appConfigs.importVarPrefix}-userpool-arn
+  toolsintPublicLoadBalancerName: ${self:custom.appConfigs.importVarPrefix}-tls
+  toolsintPublicAlbExportName: ${self:custom.appConfigs.importVarPrefix}-tlsint-alb
+  toolsintPublicAlbDNSNameExportName: ${self:custom.appConfigs.importVarPrefix}-tlsint-alb-dns
+  
+  lambdaPath: lambda/functions
+  layersPath: lambda/layers
+  customDomainName:
+    dev: cloudops-api-dev.core.cvent.org
+    prod: cloudops-api.core.cvent.org
+  albDomainPrefix:
+    dev: cloudops-tlsint-dev
+    prod: cloudops-tlsint
+  albCustomDomainName:
+    dev: cloudops-tlsint-dev.core.cvent.org
+    prod: cloudops-tlsint.core.cvent.org
+  importPrefixServiceName:
+    cloudops-base-api-dep: ${self:service.name}
+    others: ${self:service.name}-dep
+  envMap:
+    dev: development
+    prod: production
+  awsAccount:
+    dev: cvent-sandbox
+    prod: cvent-management
+  vpcSubnetsStackName:
+    # dev: vpc-cvent-development # there is no cfn for this account for VPC
+    dev: cvent-sandbox
+    prod: vpc-cvent-management # No stack now vpc-4cebbd2a
+  
+  vpc:
+    dev: # cvent sandbox account sg and subnets
+      vpcId: vpc-73e96e15
+      elbSecurityGroups:
+        - sg-49c06f00 #cvent-sandbox-shared-services-ecs-alb
+      securityGroupIds:
+        - sg-3f14c343 #commonSgId
+        - sg-5c931423 #subnetSgId
+        
+      subnetIds:
+        - subnet-2fbb3e13 # standard-us-east-1e
+        - subnet-cb9fe890 # standard-us-east-1a
+      publicSubnets:
+        - subnet-bc403991
+        - subnet-2dbb3e11
+      acmCertificates:
+        core: arn:aws:acm:us-east-1:572724207364:certificate/026aa4bd-8136-474a-b692-746bd68c3d5c
+        cventnet: arn:aws:acm:us-east-1:572724207364:certificate/0499dfef-f2fc-47b7-8f1b-0e8584482d06
+        cventcom: arn:aws:acm:us-east-1:572724207364:certificate/1193980c-ccfc-4361-a670-6b3555a943a6
+    # dev:
+    #   securityGroupIds:
+    #     - 'Fn::ImportValue': vpc-cvent-development-SgCommonId
+    #     - 'Fn::ImportValue': vpc-cvent-development-SgSubnetStandardId
+    #   subnetIds:
+    #     - 'Fn::ImportValue': vpc-cvent-development-SubnetIdStandardUsEast1a
+    #     - 'Fn::ImportValue': vpc-cvent-development-SubnetIdStandardUsEast1b
+    #     - 'Fn::ImportValue': vpc-cvent-development-SubnetIdStandardUsEast1c
+    #     - 'Fn::ImportValue': vpc-cvent-development-SubnetIdStandardUsEast1d
+    prod:
+      # if vpc is created manually use Ids else import
+      vpcId: vpc-4cebbd2a
+      elbSecurityGroups:
+        - sg-f08e30b9 #cvent-management-shared-services-ecs-alb
+      securityGroupIds:
+        - sg-d00bddaf # 'Fn::ImportValue': sg-common-id
+        - sg-319c304e # management 
+        - sg-57822e28 # Services 'Fn::ImportValue': sg-subnet-services-id
+      subnetIds:
+        - subnet-a5a39a88 # 'Fn::ImportValue': vpc-cvent-management-StandardAz1Id
+        - subnet-ff648db7 # 'Fn::ImportValue': vpc-cvent-management-StandardAz2Id
+        - subnet-a52216fe
+        - subnet-57582e32
+      publicSubnets:
+        - subnet-a7a39a8a # dmz-elb-us-east-1a
+        - subnet-fd648db5 # dmz-elb-us-east-1b
+        - subnet-a42216ff # dmz-elb-us-east-1c
+        - subnet-56582e33 # dmz-elb-us-east-1d
+      acmCertificates:
+        core: arn:aws:acm:us-east-1:667621734181:certificate/4d2a4076-446d-408b-a5f0-9a0c077a09db
+        cventcom: arn:aws:acm:us-east-1:667621734181:certificate/44ee4818-9b92-4d4f-a7ff-73b48dff4bc6

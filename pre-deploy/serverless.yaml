@@ -1,0 +1,109 @@
+service: cloudops-base-api-dep
+
+provider:
+    name: aws
+    runtime: python3.8
+    region: us-east-1
+    stackTags: ${file(../config/shared/default.yaml):tags}
+
+custom:
+    appConfigs: ${file(../config/shared/default.yaml):appConfigs}
+
+resources:
+    Resources:
+        CognitoUserPool:
+          Type: "AWS::Cognito::UserPool"
+          Properties:
+            MfaConfiguration: OFF
+            UserPoolName: ${self:custom.appConfigs.userPoolName}
+            # UsernameAttributes:
+            #   - email
+            Policies:
+              PasswordPolicy:
+                MinimumLength: 12
+                RequireLowercase: True
+                RequireNumbers: True
+                RequireSymbols: True
+                RequireUppercase: True
+        UserPoolDomain:
+          Type: AWS::Cognito::UserPoolDomain
+          Properties:
+            UserPoolId: { Ref: CognitoUserPool }
+            Domain: ${self:custom.appConfigs.albDomainPrefix.${self:custom.appConfigs.currentStage}}
+            # For Custom Domain Name
+            # Domain: ${self:custom.appConfigs.albCustomDomainName.${self:custom.appConfigs.currentStage}}
+            # CustomDomainConfig:
+            #     CertificateArn: ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}.acmCertificates.core}
+        CognitoUserPoolClient:
+          Type: "AWS::Cognito::UserPoolClient"
+          Properties:
+            ClientName: ${self:custom.appConfigs.userPoolClientName}
+            GenerateSecret: True
+            CallbackURLs:
+                - https://${self:custom.appConfigs.albCustomDomainName.${self:custom.appConfigs.currentStage}}/oauth2/idpresponse
+                # - "Fn::Join":
+                #     - ""
+                #     - - "https://"
+                #       - 'Fn::ImportValue': ${self:custom.appConfigs.toolsintPublicAlbDNSNameExportName}
+                #       - "/oauth2/idpresponse"
+            #   # Replace DNS and CNAME with Load balancer's DNS and CNAMEs
+            #   # For reference: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html
+            #   - https://DNS/oauth2/idpresponse
+            #   - https://CNAME/oauth2/idpresponse
+            AllowedOAuthScopes:
+              - email
+              - openid
+            AllowedOAuthFlows:
+              - code
+              - implicit
+            AllowedOAuthFlowsUserPoolClient: True
+            ExplicitAuthFlows:
+              - ALLOW_ADMIN_USER_PASSWORD_AUTH
+              - ALLOW_USER_PASSWORD_AUTH
+              - ALLOW_REFRESH_TOKEN_AUTH
+            PreventUserExistenceErrors: ENABLED
+            SupportedIdentityProviders:
+                - COGNITO
+            UserPoolId:
+              Ref: CognitoUserPool
+        ToolsIntPublicLoadBalancer:
+          Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+          Properties:
+            Name: ${self:custom.appConfigs.toolsintPublicLoadBalancerName}
+            Type: application
+            Scheme: internet-facing 
+            Subnets:
+              ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}.publicSubnets}
+            SecurityGroups:
+              - ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}.securityGroupIds.0}
+              - ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}.elbSecurityGroups.0}
+    Outputs:
+        CognitoUserPoolArn:
+            Value:
+              Fn::GetAtt:
+                - CognitoUserPool
+                - Arn
+            Export:
+              Name: ${self:custom.appConfigs.userPoolArnExportName}
+        CognitoUserPoolId:
+            Value:
+              Ref: CognitoUserPool
+            Export:
+              Name: ${self:custom.appConfigs.userPoolIdExportName}
+        CognitoUserPoolClientId:
+            Value:
+              Ref: CognitoUserPoolClient
+            Export:
+              Name: ${self:custom.appConfigs.userPoolClientIdExportName}
+        ToolsIntPublicLoadBalancerArn:
+            Value:
+              Ref: ToolsIntPublicLoadBalancer
+            Export:
+              Name: ${self:custom.appConfigs.toolsintPublicAlbExportName}
+        ToolsIntPublicLoadBalancerDnsName:
+            Value:
+              Fn::GetAtt:
+                - ToolsIntPublicLoadBalancer
+                - DNSName
+            Export:
+              Name: ${self:custom.appConfigs.toolsintPublicAlbDNSNameExportName}

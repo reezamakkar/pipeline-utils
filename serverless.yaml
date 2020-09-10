@@ -1,0 +1,345 @@
+# org: itautomation
+# app: cloudops
+service: cloudops-base-api
+
+plugins:
+  - serverless-python-requirements
+  - serverless-plugin-scripts
+  - serverless-domain-manager
+provider:
+  name: aws
+  runtime: python3.8
+  region: us-east-1
+  timeout: 29
+  memorySize: 192
+  iamRoleStatements: ${file(sls-templates/IamRoleStatements.json)}
+  stackTags: ${file(config/shared/default.yaml):tags}
+  alb:
+    targetGroupPrefix: cloudops-api-
+
+# https://serverless.com/plugins/serverless-python-requirements/ Per-Function requirements
+package:
+  individually: true
+
+custom:
+  appConfigs: ${file(config/shared/default.yaml):appConfigs}
+  customDomain:
+    domainName: ${file(config/shared/default.yaml):appConfigs.customDomainName.${self:custom.appConfigs.currentStage}}
+    basePath: 'base'
+    createRoute53Record: false
+  pythonRequirements:
+    dockerizePip: true
+    useDownloadCache: true
+    useStaticCache: true
+    staticCacheMaxVersions: 10
+  scripts:
+    hooks:
+      'deploy:createDeploymentArtifacts': npm run build
+      'deploy:finalize': aws lambda invoke --function-name  ${self:service.name}-${self:custom.appConfigs.currentStage}-seed_f5_dynamodb --payload '{}' response.json --region 'us-east-1'
+
+# Documentation: https://serverless.com/framework/docs/providers/aws/guide/layers/#aws---layers
+layers:
+  cloudopsBase:
+      name: cloudops
+      path: ${self:custom.appConfigs.layersPath}/cloudops
+      description: Cloudops Base library layer
+      package:
+        exclude:
+          - venv/**
+          - node_modules/**
+          - package.zip
+      compatibleRuntimes:
+        - python3.6
+        - python3.7
+        - python3.8
+      # allowedAccounts: # optional, a list of AWS account IDs allowed to access this layer.
+      #   - '*'
+      # retain: false # optional, false by default. If true, layer versions are not deleted as new ones are created
+
+functions:
+  seed_f5_dynamodb:
+    handler: dynamodb.lambda_handler
+    module: ${self:custom.appConfigs.lambdaPath}/f5_vip/seed_db
+    timeout: 900
+    environment:
+      ${file(config/shared/env.yaml):vip_irules.${self:custom.appConfigs.currentStage}}
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+  
+  sample:
+    handler: test_handlers.get_info
+    module: ${self:custom.appConfigs.lambdaPath}/sample_lambda
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    events:
+      - http:
+          path: /info
+          method: get
+          integration: lambda-proxy
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayAuthorizer
+          cors:
+            ${file(sls-templates/api-settings.yaml):cors}
+
+  configMaps:
+    handler: handler.lambda_handler
+    module: ${self:custom.appConfigs.lambdaPath}/config_maps
+    environment:
+      env: ${self:custom.appConfigs.envMap.${self:custom.appConfigs.currentStage}, self:custom.appConfigs.envMap.dev}
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    package:
+      exclude:
+        - venv/**
+        - node_modules/**
+      include:
+        - ${self:custom.appConfigs.lambdaPath}/config_maps/**
+    events:
+      - http:
+          path: /config
+          method: POST
+          integration: lambda-proxy
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayAuthorizer
+          cors:
+            ${file(sls-templates/api-settings.yaml):cors}
+
+  login:
+    handler: auth.get_token
+    module: ${self:custom.appConfigs.lambdaPath}/core
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    events:
+      - http:
+          path: /login
+          method: POST
+    environment:
+      UserPool:
+          'Fn::ImportValue': ${self:custom.appConfigs.userPoolIdExportName}
+      AppClientId:
+          'Fn::ImportValue': ${self:custom.appConfigs.userPoolClientIdExportName}
+
+  toolsint:
+    handler: toolsint.lambda_handler
+    module: ${self:custom.appConfigs.lambdaPath}/core
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    events:
+      - http:
+          path: /toolsint
+          method: POST
+    vpc:
+      ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}}
+    environment:
+      ${file(config/shared/env.yaml):toolsint.${self:custom.appConfigs.currentStage}}
+
+  jiraTickets:
+    handler: jira.lambda_handler
+    module: ${self:custom.appConfigs.lambdaPath}/core
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    vpc:
+      ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}}
+    environment:
+      ${file(config/shared/env.yaml):jira.${self:custom.appConfigs.currentStage}}
+    events:
+      - http:
+          path: /jira
+          method: post
+          integration: lambda-proxy
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayAuthorizer
+          cors:
+            ${file(sls-templates/api-settings.yaml):cors}
+  
+  vip_irules:
+    handler: get_vip.main
+    module: ${self:custom.appConfigs.lambdaPath}/f5_vip
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    environment:
+      ${file(config/shared/env.yaml):vip_irules.${self:custom.appConfigs.currentStage}}
+    events:
+      - http:
+          path: /f5
+          method: post
+          integration: lambda-proxy
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayAuthorizer
+          cors:
+            ${file(sls-templates/api-settings.yaml):cors}
+
+  tlsint:
+    handler: tlsint.main_handler
+    module: ${self:custom.appConfigs.lambdaPath}/tlsint
+    timeout: 300
+    environment:
+      toolsint_function_name: 
+          ${self:service.name}-${self:custom.appConfigs.currentStage}-toolsint
+      UserPool:
+          'Fn::ImportValue': ${self:custom.appConfigs.userPoolIdExportName}
+      AppClientId:
+          'Fn::ImportValue': ${self:custom.appConfigs.userPoolClientIdExportName}
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    events:
+      - alb:
+          listenerArn: { Ref: HttpListener }
+          priority: 1
+          multiValueHeaders: true
+          conditions:
+            path:
+              - /tlsint
+
+  toolsint_whitelist:
+    handler: main.lambda_handler
+    module: ${self:custom.appConfigs.lambdaPath}/toolsint_whitelist
+    timeout: 900
+    environment:
+      ${file(config/shared/env.yaml):toolsint_whitelist.${self:custom.appConfigs.currentStage}}
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+
+  testAlb:
+    handler: test_alb.lambda_handler
+    module: ${self:custom.appConfigs.lambdaPath}/tlsint
+    environment:
+      toolsint_function_name: 
+          ${self:service.name}-${self:custom.appConfigs.currentStage}-toolsint
+      UserPool:
+          'Fn::ImportValue': ${self:custom.appConfigs.userPoolIdExportName}
+      AppClientId:
+          'Fn::ImportValue': ${self:custom.appConfigs.userPoolClientIdExportName}
+    layers:
+      - { Ref: CloudopsBaseLambdaLayer}
+    events:
+      - alb:
+          listenerArn: { Ref: HttpListener }
+          priority: 2
+          multiValueHeaders: true
+          conditions:
+            # Can have multiple paths
+            # For details on listener rules refer to https://github.com/serverless/serverless/pull/6293
+            path:
+              - /test
+            #method:
+            #  - POST
+            #  - GET
+              # - DELETE
+              # - PUT
+            # for source headers conditions
+            # header:
+            #   name: Accept
+            #   values:
+            #     - application/json
+            #     - text/html
+            
+            # For query string conditions
+            # query:
+            #   id: 5
+            
+            # For IP based conditions
+            # ip:
+            #   - fe80:0000:0000:0000:0204:61ff:fe9d:f156/6
+            #   - 192.168.0.1/0
+
+resources:
+  Resources:
+    ApiGatewayAuthorizer:
+      DependsOn:
+        - ApiGatewayRestApi
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: cognito-authorizer
+        IdentitySource: method.request.header.Authorization
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        Type: COGNITO_USER_POOLS
+        ProviderARNs:
+          - 'Fn::ImportValue': ${self:custom.appConfigs.userPoolArnExportName}
+
+    HttpListener:
+      Type: 'AWS::ElasticLoadBalancingV2::Listener'
+      Properties:
+        DefaultActions:
+          #- Type: 'authenticate-cognito'
+          #  Order: 1
+          #  AuthenticateCognitoConfig:
+          #      UserPoolArn:
+          #          'Fn::ImportValue': ${self:custom.appConfigs.userPoolArnExportName}
+          #      # TODO: Recreate user pool client with generate client secret true
+          #      UserPoolClientId: '3msral7jllfc662dais0lkkr3g'
+          #          # 'Fn::ImportValue': ${self:custom.appConfigs.userPoolClientIdExportName}
+          #      UserPoolDomain: "tlsint" # TODO: replace with right values here
+          #      # SessionCookieName: "my-cookie"
+          #      SessionTimeout: 3600
+          #      Scope: email
+          #      # AuthenticationRequestExtraParams:
+          #      #     display: page
+          #      #     prompt: login
+          #      OnUnauthenticatedRequest: deny
+          - Type: 'fixed-response'
+            Order: 99
+            FixedResponseConfig:
+              StatusCode: '404'
+              ContentType: 'application/json'
+              MessageBody: '{ "response": "error", "message": "Not found" }'
+          # - TargetGroupArn: { Ref: TargetGroup}
+          #   Type: forward
+        LoadBalancerArn:
+            'Fn::ImportValue': ${self:custom.appConfigs.toolsintPublicAlbExportName}
+        Port: 443
+        SslPolicy: ELBSecurityPolicy-TLS-1-2-Ext-2018-06
+        Protocol: HTTPS
+
+    AlbListenerCerts:
+        Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+        Properties:
+            Certificates:
+                - CertificateArn: ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}.acmCertificates.cventcom}
+                - CertificateArn: ${self:custom.appConfigs.vpc.${self:custom.appConfigs.currentStage}.acmCertificates.core}
+            ListenerArn: { Ref: HttpListener }
+
+    F5VirtualServersTable:
+      Type: AWS::DynamoDB::Table
+      Properties: 
+        TableName: ${file(config/shared/env.yaml):vip_irules.${self:custom.appConfigs.currentStage}.dynamodb_table_name}
+        AttributeDefinitions:
+          - AttributeName: vip
+            AttributeType: S
+          - AttributeName: stage
+            AttributeType: S
+        KeySchema:
+          - AttributeName: vip
+            KeyType: HASH
+          - AttributeName: stage
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+
+    ToolsintWhitelistDB:
+      Type: AWS::DynamoDB::Table
+      Properties: 
+        TableName: ${file(config/shared/env.yaml):toolsint_whitelist.${self:custom.appConfigs.currentStage}.dynamodb_table_name}
+        AttributeDefinitions:
+          - AttributeName: role
+            AttributeType: S
+          - AttributeName: level
+            AttributeType: S
+        KeySchema:
+          - AttributeName: role
+            KeyType: HASH
+          - AttributeName: level
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
